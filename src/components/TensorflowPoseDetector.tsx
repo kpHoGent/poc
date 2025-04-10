@@ -1,60 +1,90 @@
-import React, { useRef, useState, useEffect } from 'react';
-import * as tf from '@tensorflow/tfjs';
-import '@tensorflow/tfjs-backend-webgl';
-import * as poseDetection from '@tensorflow-models/pose-detection';
-import { drawKeypoints, drawSkeleton } from '../utils/drawFunctions.ts';
+import React, { useRef, useState, useEffect } from "react";
+import * as tf from "@tensorflow/tfjs";
+import "@tensorflow/tfjs-backend-webgl";
+import * as poseDetection from "@tensorflow-models/pose-detection";
+import { drawPoses } from "../utils/drawFunctions.ts";
+import "@mediapipe/pose";
+import "@tensorflow/tfjs-core";
 
 const PoseDetectionComponent: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [model, setModel] = useState<poseDetection.PoseDetector | null>(null);
+  const [detector, setDetector] = useState<poseDetection.PoseDetector | null>(
+    null
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isDetecting, setIsDetecting] = useState<boolean>(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoReady, setVideoReady] = useState<boolean>(false);
   const animationFrameRef = useRef<number>(0);
 
-  // Laad het MoveNet model
+  const availableModels = [
+    { value: "", label: "Selecteer een model" },
+    { value: "Lightning", label: "Lightning" },
+    { value: "Thunder", label: "Thunder" },
+  ];
+
   useEffect(() => {
-    const loadModel = async () => {
-      setIsLoading(true);
-      try {
-        await tf.ready();
-        await tf.setBackend('webgl');
-        console.log('Current backend:', tf.getBackend());
-        const detector = await poseDetection.createDetector(
-          poseDetection.SupportedModels.BlazePose,
-          {
-            runtime: 'tfjs',
-            modelType: 'lite', // Probeer eerst 'lite' versie
-            enableSmoothing: true
-          }
-        );
-        setModel(detector);
-      } catch (error) {
-        console.error('Error loading model:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadModel();
-
+    loadTensorFlow();
     return () => {
-      // Cleanup
-      if (model) {
-        model.dispose();
+      if (detector) {
+        detector.dispose();
       }
       cancelAnimationFrame(animationFrameRef.current);
     };
   }, []);
 
-  // Verwerk video upload
+  const loadTensorFlow = async () => {
+    setIsLoading(true);
+    try {
+      await tf.ready();
+    } catch (error) {
+      setError(`Error loading TensorFlow.js: ${error}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadModel = async () => {
+    if (!model) {
+      setError("Selecteer eerst een model");
+      return;
+    }
+
+    setIsLoading(true);
+    if (detector) {
+      detector.dispose();
+    }
+
+    try {    
+      const detector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+          modelType:
+            model === "Lightning"
+              ? poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+              : poseDetection.movenet.modelType.SINGLEPOSE_THUNDER,
+        }
+      );
+      setDetector(detector);
+      console.log("Model geladen:", detector);
+      setError(null);
+    } catch (error) {
+      setError(`Error loading model: ${error}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleVideoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     const url = URL.createObjectURL(file);
     setVideoUrl(url);
+    setVideoReady(false);
 
     if (videoRef.current) {
       videoRef.current.src = url;
@@ -62,48 +92,66 @@ const PoseDetectionComponent: React.FC = () => {
         if (canvasRef.current && videoRef.current) {
           canvasRef.current.width = videoRef.current.videoWidth;
           canvasRef.current.height = videoRef.current.videoHeight;
+          setVideoReady(true);
         }
+      };
+      videoRef.current.onerror = () => {
+        setError("Error loading video");
       };
     }
   };
 
-  const detectPoses = async () => {
-    if (!model || !videoRef.current?.readyState) return;
-  
+  const detectPose = async () => {
+    if (!model || !videoRef.current || !videoReady || !detector) {
+      return;
+    }
+
     try {
-      const poses = await model.estimatePoses(videoRef.current, {
-        flipHorizontal: false,});
-        console.log('Poses:', poses);
-      const ctx = canvasRef.current?.getContext('2d');
+      let poses;
+
       
-      if (ctx && canvasRef.current && poses.length > 0) {
-        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-        ctx.drawImage(videoRef.current, 0, 0);
-        
-        poses.forEach(pose => {
-          drawKeypoints(pose.keypoints, ctx);
-          drawSkeleton(pose.keypoints, ctx, 
-            poseDetection.util.getAdjacentPairs(poseDetection.SupportedModels.BlazePose));
-        });
+        poses = await detector.estimatePoses(videoRef.current);
+      console.log("Poses detected:", poses);
+      
+
+      const ctx = canvasRef.current?.getContext("2d");
+      if (ctx && canvasRef.current) {
+        ctx.drawImage(
+          videoRef.current,
+          0,
+          0,
+          canvasRef.current.width,
+          canvasRef.current.height
+        );
+      }
+
+      if (poses && poses.length > 0) {
+        drawPoses(poses, ctx);
       }
     } catch (error) {
-      console.error('Detection error:', error);
+      console.error("Detection error:", error);
+      setError(
+        `Detection error: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      stopDetection();
+      return;
     }
-  
-    
-      animationFrameRef.current = requestAnimationFrame(detectPoses);
-    
+
+    animationFrameRef.current = requestAnimationFrame(detectPose);
   };
-  
   const startDetection = () => {
-    if (!isDetecting) {
+    if (!isDetecting && videoReady && detector) {
       setIsDetecting(true);
-      videoRef.current?.play();
-      detectPoses();
+      videoRef.current?.play().catch((e) => {
+        setError(`Video play error: ${e}`);
+        setIsDetecting(false);
+      });
+      detectPose();
     }
   };
 
-  // Stop pose detectie
   const stopDetection = () => {
     setIsDetecting(false);
     cancelAnimationFrame(animationFrameRef.current);
@@ -112,31 +160,44 @@ const PoseDetectionComponent: React.FC = () => {
     }
   };
 
- 
   return (
     <div className="pose-detection-container">
-      <h2>Pose Estimation met MoveNet</h2>
-      
+      <h2>Pose Estimation</h2>
+
       <div className="controls">
-        <input 
-          type="file" 
-          accept="video/*" 
-          onChange={handleVideoUpload} 
+        <div className="model-selection">
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={isLoading}
+          >
+            {availableModels.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button onClick={loadModel} disabled={isLoading || !model}>
+            {isLoading ? "Laden..." : "Laad Model"}
+          </button>
+        </div>
+
+        <input
+          type="file"
+          accept="video/*"
+          onChange={handleVideoUpload}
           disabled={isLoading}
         />
-        
+
         {videoUrl && (
           <>
-            <button 
-              onClick={startDetection} 
-              disabled={isLoading || isDetecting}
+            <button
+              onClick={startDetection}
+              disabled={isLoading || isDetecting || !detector || !videoReady}
             >
               Start Detectie
             </button>
-            <button 
-              onClick={stopDetection} 
-              disabled={!isDetecting}
-            >
+            <button onClick={stopDetection} disabled={!isDetecting}>
               Stop Detectie
             </button>
           </>
@@ -144,23 +205,23 @@ const PoseDetectionComponent: React.FC = () => {
       </div>
 
       {isLoading && <p>Model laden...</p>}
+      {error && <p className="error">{error}</p>}
 
       <div className="video-container">
-        <video 
-          ref={videoRef} 
-          playsInline 
-          loop 
-          muted 
-          style={{ display: isDetecting ? 'none' : 'block' }}
+        <video
+          ref={videoRef}
+          playsInline
+          loop
+          muted
+          style={{ display: isDetecting ? "none" : "block" }}
         />
-        <canvas 
-          ref={canvasRef} 
-          style={{ display: isDetecting ? 'block' : 'none' }}
+        <canvas
+          ref={canvasRef}
+          style={{ display: isDetecting ? "block" : "none" }}
         />
       </div>
     </div>
   );
 };
-  
 
 export default PoseDetectionComponent;
