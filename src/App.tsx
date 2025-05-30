@@ -1,14 +1,14 @@
-import './App.css'
-import VideoPoseDetector from './components/VideoPoseDetector'
-import TensorflowPoseDetection from './components/TensorflowPoseDetector'
+import "./App.css";
+import VideoPoseDetector from "./components/VideoPoseDetector";
+import TensorflowPoseDetection from "./components/TensorflowPoseDetector";
+import PoseComparisonScreen from "./screens/PoseComparisonScreen";
 
 function App() {
-
   return (
-    <>
-      <TensorflowPoseDetection />
-    </>
-  )
+    <div>
+      <PoseComparisonScreen />
+    </div>
+  );
 }
 
-export default App
+export default App;
