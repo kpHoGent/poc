@@ -1,37 +1,51 @@
 import * as poseDetection from "@tensorflow-models/pose-detection";
 import { calculateAngle } from "./drawFunctions";
+import DynamicTimeWarping from "dynamic-time-warping";
+
+const RIGHT_SIDE_KEYPOINTS = [
+  "right_eye",
+  "right_ear",
+  "right_shoulder",
+  "right_elbow",
+  "right_wrist",
+  "right_hip",
+  "right_knee",
+  "right_ankle",
+];
 
 export function calculateCosineSimilarity(
   pose1: poseDetection.Pose,
   pose2: poseDetection.Pose
 ): number {
-  if (
-    !pose1.keypoints ||
-    !pose2.keypoints ||
-    pose1.keypoints.length !== pose2.keypoints.length
-  ) {
-    throw new Error("Poses must have the same number of keypoints.");
-  }
+  const rightKps1 = pose1.keypoints.filter(
+    (keypoint) => keypoint.name && RIGHT_SIDE_KEYPOINTS.includes(keypoint.name)
+  );
+  const rightKps2 = pose2.keypoints.filter(
+    (keypoint) => keypoint.name && RIGHT_SIDE_KEYPOINTS.includes(keypoint.name)
+  );
 
+  if (rightKps1.length !== rightKps2.length) {
+    throw new Error("Right-side keypoints mismatch.");
+  }
   let dotProduct = 0;
   let magnitude1 = 0;
   let magnitude2 = 0;
 
-  for (let i = 0; i < pose1.keypoints.length; i++) {
-    const kp1 = pose1.keypoints[i];
-    const kp2 = pose2.keypoints[i];
+  for (let i = 0; i < rightKps1.length; i++) {
+    const kp1 = rightKps1[i];
+    const kp2 = rightKps2[i];
 
-    if (kp1.score && kp2.score) {
-      // Only consider keypoints with sufficient confidence
-      const x1 = kp1.x;
-      const y1 = kp1.y;
-      const x2 = kp2.x;
-      const y2 = kp2.y;
+    // if (kp1.score && kp1.score > 0.3 && kp2.score && kp2.score > 0.3) {
+    // Only consider keypoints with sufficient confidence
+    const x1 = kp1.x;
+    const y1 = kp1.y;
+    const x2 = kp2.x;
+    const y2 = kp2.y;
 
-      dotProduct += x1 * x2 + y1 * y2;
-      magnitude1 += x1 * x1 + y1 * y1;
-      magnitude2 += x2 * x2 + y2 * y2;
-    }
+    dotProduct += x1 * x2 + y1 * y2;
+    magnitude1 += x1 * x1 + y1 * y1;
+    magnitude2 += x2 * x2 + y2 * y2;
+    // }
   }
 
   if (magnitude1 === 0 || magnitude2 === 0) {
@@ -45,12 +59,7 @@ export function calculateCosineDistance(
   pose1: poseDetection.Pose,
   pose2: poseDetection.Pose
 ): number {
-  const normalizedPose1 = normalizePose(pose1);
-  const normalizedPose2 = normalizePose(pose2);
-  const similarity = calculateCosineSimilarity(
-    normalizedPose1,
-    normalizedPose2
-  );
+  const similarity = calculateCosineSimilarity(pose1, pose2);
   return 1 - similarity;
 }
 
@@ -197,22 +206,37 @@ export function dtwAlignAngleSequences(
   const m = userAnglesPerFrame.length;
 
   const costMatrix = Array.from({ length: n }, () => Array(m).fill(Infinity));
-  const path: [number, number][] = [];
 
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < m; j++) {
+  // Initialisatie
+  costMatrix[0][0] = euclideanDistance(
+    refAnglesPerFrame[0],
+    userAnglesPerFrame[0]
+  );
+
+  for (let i = 1; i < n; i++) {
+    costMatrix[i][0] =
+      costMatrix[i - 1][0] +
+      euclideanDistance(refAnglesPerFrame[i], userAnglesPerFrame[0]);
+  }
+
+  for (let j = 1; j < m; j++) {
+    costMatrix[0][j] =
+      costMatrix[0][j - 1] +
+      euclideanDistance(refAnglesPerFrame[0], userAnglesPerFrame[j]);
+  }
+
+  // Vullen van de rest van de matrix
+  for (let i = 1; i < n; i++) {
+    for (let j = 1; j < m; j++) {
       const cost = euclideanDistance(
         refAnglesPerFrame[i],
         userAnglesPerFrame[j]
       );
-      const minPrev =
-        i > 0 && j > 0
-          ? Math.min(
-              costMatrix[i - 1][j],
-              costMatrix[i][j - 1],
-              costMatrix[i - 1][j - 1]
-            )
-          : 0;
+      const minPrev = Math.min(
+        costMatrix[i - 1][j], // insert
+        costMatrix[i][j - 1], // delete
+        costMatrix[i - 1][j - 1] // match
+      );
       costMatrix[i][j] = cost + minPrev;
     }
   }
@@ -220,33 +244,45 @@ export function dtwAlignAngleSequences(
   // Backtracking
   let i = n - 1;
   let j = m - 1;
+  const path: [number, number][] = [];
 
-  while (i >= 0 && j >= 0) {
+  while (i > 0 || j > 0) {
     path.unshift([i, j]);
-    const diag = i > 0 && j > 0 ? costMatrix[i - 1][j - 1] : Infinity;
-    const left = j > 0 ? costMatrix[i][j - 1] : Infinity;
-    const up = i > 0 ? costMatrix[i - 1][j] : Infinity;
-
-    const min = Math.min(diag, left, up);
-    if (min === diag) {
+    if (i === 0) {
+      j--;
+    } else if (j === 0) {
       i--;
-      j--;
-    } else if (min === left) {
-      j--;
     } else {
-      i--;
+      const diag = costMatrix[i - 1][j - 1];
+      const left = costMatrix[i][j - 1];
+      const up = costMatrix[i - 1][j];
+      const min = Math.min(diag, left, up);
+      if (min === diag) {
+        i--;
+        j--;
+      } else if (min === left) {
+        j--;
+      } else {
+        i--;
+      }
     }
   }
+  path.unshift([0, 0]);
 
+  // Aligned sequences
   const aligned1: number[][] = [];
   const aligned2: number[][] = [];
-
   for (const [i1, i2] of path) {
-    aligned1.push(seq1[i1]);
-    aligned2.push(seq2[i2]);
+    aligned1.push(refAnglesPerFrame[i1]);
+    aligned2.push(userAnglesPerFrame[i2]);
   }
 
-  return { aligned1, aligned2, alignmentPath: path };
+  return {
+    aligned1,
+    aligned2,
+    alignmentPath: path,
+    cost: costMatrix[n - 1][m - 1],
+  };
 }
 
 export function cosineSimilarityVec(a: number[], b: number[]): number {
@@ -348,4 +384,156 @@ export function interpolatePerAngleArray(arr: (number[] | null)[]): number[][] {
   }
 
   return result as number[][];
+}
+
+function cropAndResize(pose: poseDetection.Pose, targetSize = 256) {
+  const validPoints = pose.keypoints.filter(
+    (keypoint) => keypoint.score && keypoint.score > 0.3
+  );
+
+  const minX = Math.min(...validPoints.map((keypoint) => keypoint.x));
+  const minY = Math.min(...validPoints.map((keypoint) => keypoint.y));
+  const maxX = Math.max(...validPoints.map((keypoint) => keypoint.x));
+  const maxY = Math.max(...validPoints.map((keypoint) => keypoint.y));
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+
+  const scaleX = targetSize / width;
+  const scaleY = targetSize / height;
+
+  const scaledKeypoints = pose.keypoints.map((keypoint) => ({
+    ...keypoint,
+    x: (keypoint.x - minX) * scaleX,
+    y: (keypoint.y - minY) * scaleY,
+  }));
+
+  return scaledKeypoints;
+}
+
+function l2Normalize(keypoints: poseDetection.Keypoint[]) {
+  const vector = keypoints.flatMap((kp) => [kp.x, kp.y]);
+  const norm = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
+
+  const normalized = keypoints.map((keypoint) => ({
+    ...keypoint,
+    x: keypoint.x / norm,
+    y: keypoint.y / norm,
+  }));
+
+  return normalized;
+}
+
+function preprocessPose(
+  pose: poseDetection.Pose,
+  targetSize = 256
+): poseDetection.Pose {
+  const croppedKeypoints = cropAndResize(pose, targetSize);
+  const normalizedKeypoints = l2Normalize(croppedKeypoints);
+
+  return {
+    ...pose,
+    keypoints: normalizedKeypoints,
+  };
+}
+
+export function preprocessPoses(
+  poses: poseDetection.Pose[],
+  targetSize = 256
+): poseDetection.Pose[] {
+  return poses.map((pose) => preprocessPose(pose, targetSize));
+}
+
+export function dtw(
+  reference: poseDetection.Pose[],
+  comparison: poseDetection.Pose[]
+) {
+  const dtw = new DynamicTimeWarping(
+    reference,
+    comparison,
+    calculateCosineDistance
+  );
+
+  const path = dtw.getPath();
+
+  const alignedReference: poseDetection.Pose[] = [];
+  const alignedComparison: poseDetection.Pose[] = [];
+
+  for (const [refIdx, compIdx] of path) {
+    alignedReference.push(reference[refIdx]);
+    alignedComparison.push(comparison[compIdx]);
+  }
+
+  return { alignedReference, alignedComparison, alignedPath: path };
+}
+
+export function dtwPerAngle(
+  referenceAngles: number[][],
+  comparisonAngles: number[][]
+) {
+  const dtw = new DynamicTimeWarping(
+    referenceAngles,
+    comparisonAngles,
+    euclideanDistance
+  );
+
+  const path = dtw.getPath();
+
+  const alignedReference: number[][] = [];
+  const alignedComparison: number[][] = [];
+
+  for (const [refIdx, compIdx] of path) {
+    alignedReference.push(referenceAngles[refIdx]);
+    alignedComparison.push(comparisonAngles[compIdx]);
+  }
+
+  return { alignedReference, alignedComparison, alignedPath: path };
+}
+
+function computeAngleVariances(angleFrames: number[][]): number[] {
+  const numAngles = angleFrames[0].length;
+  const meanAngles = Array(numAngles).fill(0);
+  const variances = Array(numAngles).fill(0);
+
+  // 1. Bereken gemiddelde per hoek
+  angleFrames.forEach((frame) => {
+    frame.forEach((angle, idx) => {
+      meanAngles[idx] += angle;
+    });
+  });
+  meanAngles.forEach((sum, idx) => {
+    meanAngles[idx] = sum / angleFrames.length;
+  });
+
+  // 2. Bereken variantie per hoek
+  angleFrames.forEach((frame) => {
+    frame.forEach((angle, idx) => {
+      const diff = angle - meanAngles[idx];
+      variances[idx] += diff * diff;
+    });
+  });
+  variances.forEach((sum, idx) => {
+    variances[idx] = sum / angleFrames.length;
+  });
+
+  return variances;
+}
+
+function normalizeWeights(variances: number[]): number[] {
+  const total = variances.reduce((sum, val) => sum + val, 0);
+  if (total === 0) return variances.map(() => 1 / variances.length); // fallback
+  return variances.map((v) => v / total);
+}
+
+function weightedEuclideanDistance(
+  v1: number[],
+  v2: number[],
+  weights: number[]
+): number {
+  let sum = 0;
+  for (let i = 0; i < v1.length; i++) {
+    const diff = v1[i] - v2[i];
+    sum += weights[i] * diff * diff;
+  }
+  return Math.sqrt(sum);
 }

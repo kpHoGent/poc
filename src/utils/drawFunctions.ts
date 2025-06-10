@@ -50,7 +50,7 @@ function drawSkeleton(
     keypointMap[keypoint.name] = keypoint;
   });
 
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 8;
 
   for (let i = 0; i < connections.length; i++) {
     const [p1Name, p2Name] = connections[i];

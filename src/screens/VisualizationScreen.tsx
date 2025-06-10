@@ -17,6 +17,8 @@ const VisualizationScreen: React.FC<VisualizationScreenProps> = ({
   const refVideoRef = useRef<HTMLVideoElement>(null);
   const targetVideoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const refVideoEnded = useRef(false);
+  const targetVideoEnded = useRef(false);
 
   // Mapping van hoeken naar skeletonlijnen (volgorde moet overeenkomen met drawFunctions connections)
   const angleToConnectionIndices = [
@@ -39,10 +41,26 @@ const VisualizationScreen: React.FC<VisualizationScreenProps> = ({
   };
 
   // Herstart beide video's als ze afgelopen zijn
-  const handleEnded = () => {
+  const handleRefEnded = () => {
+    refVideoEnded.current = true;
+    if (targetVideoEnded.current) {
+      restartVideos();
+    }
+  };
+
+  const handleTargetEnded = () => {
+    targetVideoEnded.current = true;
+    if (refVideoEnded.current) {
+      restartVideos();
+    }
+  };
+
+  const restartVideos = () => {
     if (refVideoRef.current && targetVideoRef.current) {
       refVideoRef.current.currentTime = 0;
       targetVideoRef.current.currentTime = 0;
+      refVideoEnded.current = false;
+      targetVideoEnded.current = false;
       refVideoRef.current.play();
       targetVideoRef.current.play();
       drawLoop();
@@ -80,7 +98,7 @@ const VisualizationScreen: React.FC<VisualizationScreenProps> = ({
           const angleDiff = angleDiffs[frameIdx][angleIdx];
           let color: Color = "green";
           if (angleDiff > 20) color = "red";
-          else if (angleDiff > 10) color = "yellow";
+          //else if (angleDiff > 15) color = "yellow";
 
           for (const connIdx of angleToConnectionIndices[angleIdx]) {
             const currentColor = lineColors[connIdx];
@@ -117,13 +135,13 @@ const VisualizationScreen: React.FC<VisualizationScreenProps> = ({
       }}
     >
       <div style={{ width: "100%", maxWidth: 700 }}>
-        <h3>Te vergelijken video (met skeleton)</h3>
+        <h3>Te vergelijken video</h3>
         <div style={{ position: "relative", width: "100%" }}>
           <video
             ref={targetVideoRef}
             src={targetVideoUrl}
             onLoadedMetadata={handleTargetLoaded}
-            onEnded={handleEnded}
+            onEnded={handleTargetEnded}
             style={{ width: "100%", maxWidth: 700, minHeight: 320 }}
             controls={false}
             muted
@@ -146,7 +164,7 @@ const VisualizationScreen: React.FC<VisualizationScreenProps> = ({
         <video
           ref={refVideoRef}
           src={referenceVideoUrl}
-          onEnded={handleEnded}
+          onEnded={handleRefEnded}
           style={{ width: "100%", maxWidth: 700, minHeight: 320 }}
           controls={false}
           muted

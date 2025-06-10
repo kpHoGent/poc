@@ -30,12 +30,12 @@ const VideoUploadScreen: React.FC<VideoUploadScreenProps> = ({
       <div style={uploadFlexBoxStyle}>
         {referenceVideo && (
           <FileUploader
-            title="Your video"
+            title="Te vergelijken video"
             handleFileUpload={(e) => handleFileUpload("target", e)}
           />
         )}
         <FileUploader
-          title="Reference video"
+          title="Referentie video"
           handleFileUpload={(e) => handleFileUpload("reference", e)}
         />
       </div>
